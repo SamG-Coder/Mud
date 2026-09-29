@@ -631,7 +631,7 @@ async function init() {
   canvas.dataset.adapter = JSON.stringify(diag.adapter);
   for (const entry of KERNELS) {
     kernels[entry] = await rt.kernel(
-      await (await fetch(`generated/${entry}.json`)).json(),
+      await (await fetch(new URL(`../generated/${entry}.json`, import.meta.url), {cache: "no-store"})).json(),
     );
     $("loading").textContent = `Preparing ${entry}…`;
   }

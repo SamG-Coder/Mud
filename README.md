@@ -56,7 +56,7 @@ Evidence is in **artifacts/validation.json** and **artifacts/mud-*.png**, includ
 
 ## GitHub Pages
 
-Pushes to `main` and manual workflow runs compile the seventeen CUDA WebShader kernels, check JavaScript syntax and the dependency lock, and deploy a static site to GitHub Pages. Pull requests run the build without deploying. The package contains the browser module dependency tree, generated kernels, CUDA source, research notes and upstream license. Relative asset paths support the `/Mud/` project URL.
+Pushes to `main` and manual workflow runs compile the seventeen CUDA WebShader kernels, check JavaScript syntax and the dependency lock, and deploy a static site to GitHub Pages. Pull requests run the build without deploying. The package contains the browser module dependency tree, generated kernels, CUDA source, research notes and upstream license. Relative asset paths support the `/Mud/` project URL. The complete executable module and shader graph is pinned to a content-derived build directory so cached hosts cannot load shaders from a different deployment. Run `node scripts/test-pages.mjs` after packaging to verify two cached-page loads initialize and dispatch the matching shaders.
 
 Run `npm run check` and `npm run pages` locally to create `dist/`. GitHub Actions builds the browser shaders through the JavaScript compiler; native CUDA and hardware GPU validation run locally. WebGPU support and a compatible browser/GPU are required for the live simulation.
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { KERNELS } from "../src/kernels.js";
 import { readFile, writeFile, mkdir, copyFile, rm } from "node:fs/promises";
 import { resolve, relative, dirname, sep } from "node:path";
@@ -34,8 +35,26 @@ for (const entry of entries) {
   if (artifact.name !== entry || !artifact.wgsl?.includes("@compute")) throw Error(`Invalid kernel: ${entry}`);
   await copy(path);
 }
+// Put the complete executable dependency graph under one content-derived path.
+// A cached HTML page can never combine a cached host with new shader bindings.
+const executablePaths = [...modules].sort().concat(entries.map(entry => `generated/${entry}.json`));
+const hash = createHash("sha256");
+for (const path of executablePaths) {
+  hash.update(path); hash.update("\0");
+  hash.update((await readFile(resolve(root, path), "utf8")).replace(/\r\n/g, "\n"));
+}
+const assetRoot = `build/${hash.digest("hex").slice(0, 20)}/`;
+for (const path of executablePaths) {
+  const target = resolve(destination, assetRoot, path);
+  await mkdir(dirname(target), {recursive:true});
+  await copyFile(resolve(root,path),target);
+}
+const html = (await readFile("index.html", "utf8"))
+  .replace('src="src/main.js"', `src="${assetRoot}src/main.js"`)
+  .replace('href="style.css"', `href="style.css?v=${assetRoot.split("/")[1]}"`);
+await writeFile(resolve(destination,"index.html"),html);
 await writeFile(resolve(destination, ".nojekyll"), "");
 await writeFile(resolve(destination, "build-info.json"), JSON.stringify({
-  commit: process.env.GITHUB_SHA || "local", kernels: entries, browserModules: [...modules].sort(),
+  commit: process.env.GITHUB_SHA || "local", assetRoot, kernels: entries, browserModules: [...modules].sort(),
 }, null, 2));
 console.log(`Pages package: ${entries.length} CUDA kernels, ${modules.size} browser modules; relative paths support /Mud/.`);
