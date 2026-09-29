@@ -1,0 +1,1 @@
+export const KERNELS = ["texture_generate", "texture_mip", "initialize", "surface_initialize", "surface_advect", "surface_clear", "objects_step", "mud_flux", "mud_step", "water_flux", "water_step", "material_edit", "material_transport", "mixture_solid", "mixture_water", "churn", "render"];

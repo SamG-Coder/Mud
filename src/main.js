@@ -1,8 +1,13 @@
+import { KERNELS } from "./kernels.js";
 import { GpuRuntime } from "../vendor/cuda-webshader/runtime/runtime.js";
 const $ = (id) => document.getElementById(id),
   canvas = $("scene"),
-  n = 256;
+  n = 512,
+  detailN = 1024,
+  textureSize = 4096,
+  chainLength = (textureSize * textureSize * 4 - 1) / 3;
 const state = {
+  clayType: 1,
   softness: 0.72,
   water: 0.006,
   thickness: 8,
@@ -14,13 +19,16 @@ const state = {
   amount: 1,
   view: 0,
 };
-const camera = { yaw: 0.48, pitch: 0.67, distance: 6.7 };
+const camera = { yaw: 0.48, pitch: 0.67, distance: 6.1 };
 const diag = (window.mudDiagnostics = {
   ready: false,
   errors: [],
   frames: 0,
   simulationSteps: 0,
   grid: n,
+  materialGrid: detailN,
+  textureResolution: [textureSize, textureSize],
+  textureLayers: 3,
   area: [5, 5],
   frameTimes: [],
 });
@@ -41,6 +49,13 @@ let rt,
   material,
   materialScratch,
   textureMap,
+  drive,
+  colours,
+  coloursScratch,
+  coordinates,
+  coordinatesScratch,
+  swipes,
+  swipesScratch,
   pixels,
   ctx,
   selected = 0,
@@ -96,6 +111,7 @@ $("regenerate").onclick = () => {
   regeneratePending = true;
 };
 let regeneratePending = false;
+$("clayType").onchange = () => (state.clayType = Number($("clayType").value));
 $("view").onchange = () => (state.view = Number($("view").value));
 document.querySelectorAll("[data-tool]").forEach(
   (btn) =>
@@ -264,14 +280,15 @@ function dispatch(batch, name, buffers, scalars, count = n * n) {
     invocation = kernels[name].bind(buffers, scalars);
     bindings.set(key, invocation);
   } else invocation.setScalars(scalars);
-  batch.dispatch(invocation, [Math.ceil(count / 128), 1, 1]);
+  const groups = Math.ceil(count / 128), x = Math.min(groups, 65535);
+  batch.dispatch(invocation, [x, Math.ceil(groups / x), 1]);
 }
 function reset() {
   const batch = rt.batch();
   dispatch(
     batch,
     "initialize",
-    { field: a, objects, material, mixture, residue, structure },
+    { field: a, objects, material, mixture, residue, structure, drive },
     {
       n,
       water: state.water,
@@ -279,9 +296,11 @@ function reset() {
       seed: state.seed,
     },
   );
+  dispatch(batch,"surface_initialize",{colours,coordinates,swipes},{detailN,seed:state.seed},detailN*detailN);
   batch.submit();
   simTime = 0;
   accumulator = 0;
+  fastUntil=0;
   resetPending = false;
 }
 function generateTexture() {
@@ -290,13 +309,24 @@ function generateTexture() {
     batch,
     "texture_generate",
     { textureMap },
-    { textureSize: 2048, seed: state.seed },
-    2048 * 2048,
+    { textureSize, chainLength, seed: state.seed },
+    textureSize * textureSize * 3,
   );
+  let inputSize=textureSize,inputOffset=0,outputOffset=textureSize*textureSize;
+  while(inputSize>1) {
+    dispatch(batch,"texture_mip",{textureMap},{inputSize,inputOffset,outputOffset,chainLength},(inputSize/2)**2*3);
+    inputSize/=2;inputOffset=outputOffset;outputOffset+=inputSize*inputSize;
+  }
   batch.submit();
   regeneratePending = false;
 }
-function step(batch, dt) {
+let fastUntil=0;
+function step(batch,dt) {
+  if(held || demo || (brush===8 && Math.hypot(brushVX,brushVZ)>1)) fastUntil=simTime+.5;
+  const parts=simTime<fastUntil?4:1;
+  for(let k=0;k<parts;k++) integrate(batch,dt/parts);
+}
+function integrate(batch, dt) {
   if (demo) {
     targetX = Math.sin(simTime * 0.65) * 1.55;
     targetZ = Math.sin(simTime * 0.95) * 1.1;
@@ -375,7 +405,7 @@ function step(batch, dt) {
   dispatch(
     batch,
     "churn",
-    { field: a, mixture, residue, structure, objects, solidFlux },
+    { field: a, mixture, residue, structure, drive, objects, solidFlux },
     {
       n,
       dt,
@@ -398,6 +428,17 @@ function step(batch, dt) {
   simTime += dt;
   diag.simulationSteps++;
 }
+function surfaceStep(batch,dt) {
+  dispatch(batch,"surface_advect",{
+    field:a,drive,coloursIn:colours,coordinatesIn:coordinates,swipesIn:swipes,
+    coloursOut:coloursScratch,coordinatesOut:coordinatesScratch,swipesOut:swipesScratch,
+  },{n,detailN,dt,brush,bx,bz,radius:state.radius,amount:state.amount,
+     brushVX,brushVZ,clayType:state.clayType,seed:state.seed},detailN*detailN);
+  [colours,coloursScratch]=[coloursScratch,colours];
+  [coordinates,coordinatesScratch]=[coordinatesScratch,coordinates];
+  [swipes,swipesScratch]=[swipesScratch,swipes];
+  dispatch(batch,"surface_clear",{drive},{n});
+}
 async function frame(now) {
   if (!diag.ready || busy) {
     requestAnimationFrame(frame);
@@ -412,6 +453,7 @@ async function frame(now) {
     const elapsed = last ? Math.min(0.1, (now - last) / 1000) : 1 / 60;
     last = now;
     const batch = rt.batch();
+    let materialDt=0;
     if (!paused) {
       accumulator = Math.min(0.1, accumulator + elapsed);
       let steps = 0;
@@ -420,10 +462,12 @@ async function frame(now) {
         accumulator -= 1 / 120;
         steps++;
       }
+      materialDt=steps/120;
     }
     if (paused && drag && brush >= 4 && brush <= 7)
       dispatch(batch, "material_edit", { material, field: a },
         {n,dt:elapsed,brush,bx,bz,radius:state.radius,amount:state.amount,brushVX,brushVZ});
+    if(materialDt>0 || (paused && drag && brush>=4 && brush<=7)) surfaceStep(batch,materialDt||elapsed);
     dispatch(
       batch,
       "render",
@@ -435,10 +479,11 @@ async function frame(now) {
         pixels,
         mixture,
         residue,
+        colours,coordinates,swipes,
       },
       {
         n,
-        textureSize: 2048,
+        textureSize,chainLength,detailN,
         width: canvas.width,
         rows: canvas.height,
         ...camera,
@@ -498,15 +543,22 @@ window.mudTest = {
     while (busy) await new Promise((r) => setTimeout(r, 10));
     return Array.from(await rt.read(objects));
   },
-  async snapshot() {
+  async snapshot(binary=false) {
+    const encode=data=>{
+      if(!binary) return Array.from(data);
+      const bytes=new Uint8Array(data.buffer,data.byteOffset,data.byteLength);
+      let result="";for(let i=0;i<bytes.length;i+=16384) result+=String.fromCharCode(...bytes.subarray(i,i+16384));
+      return btoa(result);
+    };
     while (busy) await new Promise((r) => setTimeout(r, 10));
     return {
-      field: Array.from(await rt.read(a)),
-      objects: Array.from(await rt.read(objects)),
-      material: Array.from(await rt.read(material)),
-      mixture: Array.from(await rt.read(mixture)),
-      residue: Array.from(await rt.read(residue)),
-      structure: Array.from(await rt.read(structure)),
+      n,detailN,
+      field: encode(await rt.read(a)),
+      objects: encode(await rt.read(objects)),
+      material: encode(await rt.read(material)),
+      mixture: encode(await rt.read(mixture)),
+      residue: encode(await rt.read(residue)),
+      structure: encode(await rt.read(structure)),
       time: simTime,
     };
   },
@@ -514,13 +566,27 @@ window.mudTest = {
     paused = true;
     while (busy) await new Promise((r) => setTimeout(r, 10));
     Object.assign(state, options);
-    for (let base = 0; base < steps; base += 16) {
-      const batch = rt.batch();
-      for (let i = base; i < Math.min(steps, base + 16); i++)
-        step(batch, 1 / 120);
-      batch.submit();
-      await rt.idle();
-    }
+    busy=true;
+    try {
+      for (let base=0;base<steps;base+=16) {
+        const batch=rt.batch(),count=Math.min(16,steps-base);
+        for(let i=0;i<count;i++) step(batch,1/120);
+        surfaceStep(batch,count/120);
+        batch.submit();await rt.idle();
+      }
+    } finally {busy=false;}
+  },
+  async surfaceSnapshot(stride=4) {
+    while(busy) await new Promise(r=>setTimeout(r,10));
+    const data=await Promise.all([rt.read(colours),rt.read(coordinates),rt.read(swipes)]);
+    const compact=data.map(a=>{
+      const out=[];
+      for(let z=0;z<detailN;z+=stride) for(let x=0;x<detailN;x+=stride) {
+        const i=(z*detailN+x)*4;out.push(a[i],a[i+1],a[i+2],a[i+3]);
+      }
+      return out;
+    });
+    return {size:Math.ceil(detailN/stride),colours:compact[0],coordinates:compact[1],swipes:compact[2]};
   },
   brush(kind, x, z, vx = 0, vz = 0) {
     brushTime = performance.now();
@@ -560,24 +626,10 @@ window.mudTest = {
   },
 };
 async function init() {
-  rt = await GpuRuntime.create({ onError: fail });
+  rt = await GpuRuntime.create({ onError: fail, uniformCapacity: 262144 });
   diag.adapter = rt.describe();
   canvas.dataset.adapter = JSON.stringify(diag.adapter);
-  for (const entry of [
-    "texture_generate",
-    "initialize",
-    "objects_step",
-    "mud_flux",
-    "mud_step",
-    "water_flux",
-    "water_step",
-    "material_edit",
-    "material_transport",
-    "mixture_solid",
-    "mixture_water",
-    "churn",
-    "render",
-  ]) {
+  for (const entry of KERNELS) {
     kernels[entry] = await rt.kernel(
       await (await fetch(`generated/${entry}.json`)).json(),
     );
@@ -596,7 +648,14 @@ async function init() {
   objectScratch = rt.createBuffer(8 * 16);
   material = rt.createBuffer(n * n * 16);
   materialScratch = rt.createBuffer(n * n * 16);
-  textureMap = rt.createBuffer(2048 * 2048 * 16);
+  textureMap = rt.createBuffer(chainLength*3*4,{label:"Three packed 4096 material mip chains"});
+  drive = rt.createBuffer(n*n*16);
+  colours = rt.createBuffer(detailN*detailN*16);
+  coloursScratch = rt.createBuffer(detailN*detailN*16);
+  coordinates = rt.createBuffer(detailN*detailN*16);
+  coordinatesScratch = rt.createBuffer(detailN*detailN*16);
+  swipes = rt.createBuffer(detailN*detailN*16);
+  swipesScratch = rt.createBuffer(detailN*detailN*16);
   pixels = rt.createBuffer(canvas.width * canvas.height * 4);
   ctx = canvas.getContext("webgpu");
   ctx.configure({

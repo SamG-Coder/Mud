@@ -1,3 +1,4 @@
+import {readSnapshot as getSnapshot} from "./browser-snapshot.mjs";
 import {chromium} from 'playwright';
 import {writeFile,mkdir} from 'node:fs/promises';
 const browser=await chromium.launch({channel:'msedge',headless:true,args:['--enable-unsafe-webgpu']});
@@ -7,7 +8,7 @@ try {
   await page.waitForFunction(()=>mudDiagnostics.ready || mudDiagnostics.errors.length);
   await page.evaluate(()=>mudTest.resetLayer(8));
   await page.evaluate(()=>mudTest.advance(240));
-  const before=await page.evaluate(()=>mudTest.snapshot());
+  const before=await getSnapshot(page);
   await page.evaluate(()=>mudTest.drag(-.8,-1.2));
   await page.evaluate(()=>mudTest.advance(180));
   const trajectory=[];
@@ -21,7 +22,7 @@ try {
   }
   await page.evaluate(()=>mudTest.release());
   await page.evaluate(()=>mudTest.advance(600));
-  const after=await page.evaluate(()=>mudTest.snapshot());
+  const after=await getSnapshot(page);
   function mass(s) {
     let solid=0,water=0;
     for(let i=0;i<s.field.length;i+=4) {
@@ -36,9 +37,9 @@ try {
   if(after.field.some(v=>!Number.isFinite(v)) || trajectory.some(p=>p[1]<p[3]-.000001))
     throw Error('Reversing drag was unstable or penetrated concrete');
   let pathBefore=0,pathAfter=0,count=0;
-  const x=Math.round((-.8+2.5)/5*255);
-  for(let z=68;z<=187;z++) {
-    const i=(z*256+x)*4;
+  const n=before.n,x=Math.round((-.8+2.5)/5*(n-1));
+  for(let z=Math.round(1.3/5*(n-1));z<=Math.round(3.7/5*(n-1));z++) {
+    const i=(z*n+x)*4;
     pathBefore+=before.field[i];pathAfter+=after.field[i];count++;
   }
   const meanPermanentDepth=(pathBefore-pathAfter)/count;

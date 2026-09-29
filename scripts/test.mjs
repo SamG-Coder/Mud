@@ -1,3 +1,4 @@
+import {readSnapshot as getSnapshot} from "./browser-snapshot.mjs";
 import { chromium } from "playwright";
 import { writeFile, mkdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
@@ -42,9 +43,10 @@ try {
     { timeout: 90000 },
   );
   await page.evaluate(() => mudTest.pause());
-  const before = await page.evaluate(() => mudTest.snapshot());
+  const before = await getSnapshot(page);
+  const n=before.n;
   await page.evaluate(() => mudTest.advance(240));
-  const after = await page.evaluate(() => mudTest.snapshot());
+  const after = await getSnapshot(page);
   let water0 = 0,
     water1 = 0,
     soil0 = 0,
@@ -65,8 +67,8 @@ try {
     throw Error("Water conservation failed");
   if (minH < -0.000001) throw Error("Mud penetrated concrete");
   const contactIndex =
-    (Math.round((2.5 / 5) * 255) * 256 +
-      Math.round(((-1.15 + 2.5) / 5) * 255)) *
+    (Math.round((2.5 / 5) * (n-1)) * n +
+      Math.round(((-1.15 + 2.5) / 5) * (n-1))) *
     4;
   if (after.field[contactIndex] > 0.06)
     throw Error("Contact failed to clear finite mud layer");
@@ -79,7 +81,7 @@ try {
   await page.evaluate(() => mudTest.drag(1.45, -1.15));
   await page.evaluate(() => mudTest.advance(300));
   await page.evaluate(() => mudTest.release());
-  const dragged = await page.evaluate(() => mudTest.snapshot());
+  const dragged = await getSnapshot(page);
   let uvDelta = 0,
     heightDelta = 0;
   for (let i = 0; i < after.field.length; i += 4) {
@@ -94,12 +96,12 @@ try {
   await page.screenshot({ path: "artifacts/mud-drag.png" });
   // Release and settle: ruts should survive without continued contact.
   await page.evaluate(() => mudTest.advance(1200));
-  const settled = await page.evaluate(() => mudTest.snapshot());
+  const settled = await getSnapshot(page);
   if (settled.field.some((x) => !Number.isFinite(x)))
     throw Error("Long-run stability failed");
   const index =
-    (Math.round(((0.0 + 2.5) / 5) * 255) * 256 +
-      Math.round(((-1.15 + 2.5) / 5) * 255)) *
+    (Math.round(((0.0 + 2.5) / 5) * (n-1)) * n +
+      Math.round(((-1.15 + 2.5) / 5) * (n-1))) *
     4;
   if (settled.field[index] > 0.07) throw Error("Released smear disappeared");
   // Material edits must change their own fields, not require a geometry rebuild.
@@ -108,7 +110,7 @@ try {
   await page.evaluate(() => mudTest.brush(6, 0.8, 0.8));
   await page.evaluate(() => mudTest.advance(120));
   await page.evaluate(() => mudTest.release());
-  const painted = await page.evaluate(() => mudTest.snapshot());
+  const painted = await getSnapshot(page);
   let pigment = 0,
     normalPaint = 0;
   for (let i = 0; i < painted.material.length; i += 4) {
@@ -121,7 +123,7 @@ try {
   await page.evaluate(() => mudTest.brush(1, 0, -1));
   await page.evaluate(() => mudTest.advance(120));
   await page.evaluate(() => mudTest.release());
-  const wet = await page.evaluate(() => mudTest.snapshot());
+  const wet = await getSnapshot(page);
   let addedWater = 0;
   for (let i = 0; i < wet.field.length; i += 4)
     addedWater += wet.field[i + 1] + wet.mixture[i] - painted.field[i + 1] - painted.mixture[i];
@@ -163,7 +165,7 @@ try {
   await page.mouse.move(projected.end.x, projected.end.y, { steps: 12 });
   await page.evaluate(() => mudTest.advance(120));
   await page.mouse.up();
-  const picked = await page.evaluate(() => mudTest.snapshot());
+  const picked = await getSnapshot(page);
   if (
     Math.hypot(
       picked.objects[0] - wet.objects[0],
@@ -181,7 +183,7 @@ try {
   await page.waitForTimeout(100);
   await page.screenshot({ path: "artifacts/mud-painted.png" });
   // Smear brush moves finite mud and its coordinates while preserving volume.
-  const preSmear = await page.evaluate(() => mudTest.snapshot());
+  const preSmear = await getSnapshot(page);
   for (let k = 0; k < 4; k++) {
     await page.evaluate(
       (k) => mudTest.brush(8, -1.4 + k * 0.12, -1.2, 1.4, 0.2),
@@ -190,7 +192,7 @@ try {
     await page.evaluate(() => mudTest.advance(24));
   }
   await page.evaluate(() => mudTest.release());
-  const smeared = await page.evaluate(() => mudTest.snapshot());
+  const smeared = await getSnapshot(page);
   let smearHeightDelta = 0,
     smearUvDelta = 0,
     preMass = 0,
@@ -215,20 +217,20 @@ try {
   await page.click("#regenerate");
   await page.waitForTimeout(200);
   const textureImage1 = await page.locator("#scene").screenshot();
-  const regenerated = await page.evaluate(() => mudTest.snapshot());
+  const regenerated = await getSnapshot(page);
   if (!regenerated.field.every((v, i) => v === smeared.field[i]))
     throw Error("Texture regeneration changed geometry");
   if (textureImage0.equals(textureImage1))
     throw Error("Regenerated atlas did not change rendered material");
   // 1 cm versus 20 cm: volume must scale by 20 and the concrete stays rigid.
   await page.evaluate(() => mudTest.resetLayer(1));
-  const thin = await page.evaluate(() => mudTest.snapshot());
+  const thin = await getSnapshot(page);
   await page.screenshot({
     path: "artifacts/mud-1cm-concrete.png",
     fullPage: true,
   });
   await page.evaluate(() => mudTest.advance(480));
-  const thinSettled = await page.evaluate(() => mudTest.snapshot());
+  const thinSettled = await getSnapshot(page);
   if (thinSettled.field.some((v, i) => i % 4 === 0 && v < -0.000001))
     throw Error("Thin layer passed beneath concrete");
   for (let j = 0; j < 4; j++)
@@ -238,7 +240,7 @@ try {
     )
       throw Error("Thin layer body passed beneath concrete");
   await page.evaluate(() => mudTest.resetLayer(20));
-  const thick = await page.evaluate(() => mudTest.snapshot());
+  const thick = await getSnapshot(page);
   let thinMass = 0,
     thickMass = 0;
   for (let i = 0; i < thin.field.length; i += 4) {
@@ -273,7 +275,7 @@ try {
     if (stir) await page.evaluate(() => mudTest.brush(8, 0, 1.1, 1.4, .3));
     await page.evaluate(() => mudTest.advance(120));
     await page.evaluate(() => mudTest.release());
-    return await page.evaluate(() => mudTest.snapshot());
+    return await getSnapshot(page);
   }
   const resting = await wetPatch(false), churned = await wetPatch(true);
   function phaseMetrics(s) {
@@ -299,15 +301,15 @@ try {
   await page.screenshot({path:'artifacts/mud-separated-phases.png',fullPage:true});
   await page.selectOption('#view','0');
   await page.evaluate(() => mudTest.advance(1200));
-  const recovered=await page.evaluate(() => mudTest.snapshot());
+  const recovered=await getSnapshot(page);
   const structureRecovered=recovered.structure.reduce((a,b)=>a+b,0)/recovered.structure.length;
   if(structureRecovered<=structureChurned+.00001) throw Error('Mud strength failed to recover at rest');
   await page.evaluate(() => mudTest.brush(2,0,1.1));
   await page.evaluate(() => mudTest.advance(1200));
   await page.evaluate(() => mudTest.release());
-  const cleared = await page.evaluate(() => mudTest.snapshot());
+  const cleared = await getSnapshot(page);
   await page.evaluate(() => mudTest.advance(600));
-  const aged = await page.evaluate(() => mudTest.snapshot());
+  const aged = await getSnapshot(page);
   let exposedStainCells=0, persistentStain=0;
   for(let i=0;i<cleared.field.length;i+=4) {
     if(cleared.field[i]<.001 && cleared.residue[i]>.000001) {
@@ -323,7 +325,7 @@ try {
   await page.evaluate(() => mudTest.resetLayer(8));
   await page.evaluate(() => mudTest.advance(240));
   // Actual pointer editing must work while paused and leave geometry untouched.
-  const pausedBefore = await page.evaluate(() => mudTest.snapshot());
+  const pausedBefore = await getSnapshot(page);
   async function groundPoint(x,z) {
     return await page.evaluate(([x,z]) => {
       const c=mudTest.camera,r=document.getElementById('scene').getBoundingClientRect();
@@ -338,7 +340,7 @@ try {
   await page.click('[data-tool="6"]');
   await page.mouse.move(editStart.x,editStart.y); await page.mouse.down();
   await page.waitForTimeout(250); await page.mouse.up();
-  const pausedNormal = await page.evaluate(() => mudTest.snapshot());
+  const pausedNormal = await getSnapshot(page);
   let pausedNormalDelta=0;
   for(let i=0;i<pausedBefore.material.length;i+=4)
     pausedNormalDelta+=Math.abs(pausedBefore.material[i+2]-pausedNormal.material[i+2])+Math.abs(pausedBefore.material[i+3]-pausedNormal.material[i+3]);
@@ -348,7 +350,7 @@ try {
   await page.click('[data-tool="4"]');
   await page.mouse.move(editStart.x,editStart.y); await page.mouse.down();
   await page.mouse.move(editEnd.x,editEnd.y,{steps:20}); await page.mouse.up();
-  const pausedUv = await page.evaluate(() => mudTest.snapshot());
+  const pausedUv = await getSnapshot(page);
   let pausedUvDelta=0;
   for(let i=0;i<pausedBefore.field.length;i+=4) {
     if(pausedBefore.field[i]!==pausedUv.field[i] || pausedBefore.field[i+1]!==pausedUv.field[i+1])
@@ -428,7 +430,8 @@ try {
     smearHeightDelta,
     smearUvDelta,
     textureRegenerationPreservesGeometry: true,
-    textureResolution: [2048, 2048],
+    textureResolution: [4096, 4096],
+    textureLayers:3,physicsResolution:n,materialResolution:1024,
     concreteSupportPassed: true,
     pigment,
     normalPaint,

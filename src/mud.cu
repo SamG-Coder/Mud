@@ -69,45 +69,173 @@ __device__ float grain(float u, float v) {
          noise(u * 93.0f, v * 93.0f) * 0.3f +
          noise(u * 211.0f, v * 211.0f) * 0.2f;
 }
-// 2048-square generated material atlas: variation, micro-height, roughness,
-// silt.
-__global__ void texture_generate(float4 *textureMap, int textureSize,
-                                 int seed) {
-  int i = (int)(blockIdx.x * blockDim.x + threadIdx.x);
-  if (i >= textureSize * textureSize)
-    return;
-  float x = (float)(i % textureSize) * 5.0f / (float)textureSize;
-  float z = (float)(i / textureSize) * 5.0f / (float)textureSize;
-  float offset = (float)seed * 0.137f;
-  x += offset;
-  z -= offset;
-  float wx = x + (noise(x * 3.0f, z * 3.0f) - 0.5f) * 0.08f;
-  float wz = z + (noise(x * 3.0f + 7.0f, z * 3.0f) - 0.5f) * 0.08f;
-  float broad = noise(wx * 4.0f, wz * 4.0f);
-  float warp = noise(wx * 8.0f + 9.0f, wz * 8.0f) * 1.4f;
-  float vein = powf(sat(1.0f - fabsf(sinf(wx * 95.0f + wz * 21.0f + warp * 12.0f))), 7.0f);
-  float fine = noise(wx * 100.0f, wz * 100.0f);
-  float folds =
-      powf(1.0f - fabsf(noise(wx * 22.0f, wz * 22.0f) * 2.0f - 1.0f), 5.0f);
-  float pores = sat((noise(wx * 370.0f, wz * 370.0f) - 0.65f) * 6.0f);
-  float micro = folds * 0.0018f + vein * 0.0013f + fine * 0.00030f - pores * 0.00035f;
-  textureMap[i] = make_float4(
-      0.78f + broad * 0.18f + fine * 0.09f, micro, 0.16f + broad * 0.13f,
-      sat((noise(wx * 13.0f + 17.0f, wz * 13.0f) - 0.6f) * 3.0f));
+// Three 4096-square material textures, packed to 32 bits per texel.
+// Detail: 8 bits, signed micro-height: 16 bits, roughness: 8 bits.
+// Complete mip chains filter the microscopic grain at oblique/distant views.
+__device__ unsigned int packTex(float4 p) {
+  unsigned int colour=(unsigned int)(sat(p.x/1.5f)*255.0f+.5f);
+  unsigned int h=(unsigned int)(sat((p.y+.008f)/.016f)*65535.0f+.5f);
+  unsigned int rough=(unsigned int)(sat(p.z)*255.0f+.5f);
+  return colour | (h<<8) | (rough<<24);
 }
-__device__ float4 atlas(const float4 *textureMap, float u, float v, int size) {
-  float x = (u / 5.0f - floorf(u / 5.0f)) * (float)size;
-  float y = (v / 5.0f - floorf(v / 5.0f)) * (float)size;
-  int ix = (int)x;
-  int iy = (int)y;
-  float fx = x - (float)ix;
-  float fy = y - (float)iy;
-  int jx = (ix + 1) % size;
-  int jy = (iy + 1) % size;
-  return textureMap[iy * size + ix] * (1.0f - fx) * (1.0f - fy) +
-         textureMap[iy * size + jx] * fx * (1.0f - fy) +
-         textureMap[jy * size + ix] * (1.0f - fx) * fy +
-         textureMap[jy * size + jx] * fx * fy;
+__device__ float4 unpackTex(unsigned int p) {
+  return make_float4((float)(p&255u)/255.0f*1.5f,
+    (float)((p>>8)&65535u)/65535.0f*.016f-.008f,
+    (float)(p>>24)/255.0f,0.0f);
+}
+__global__ void texture_generate(unsigned int *textureMap, int textureSize,
+                                 int chainLength, int seed) {
+  int i=(int)((blockIdx.y*gridDim.x+blockIdx.x)*blockDim.x+threadIdx.x);
+  int area=textureSize*textureSize;
+  if(i>=area*3) return;
+  int kind=i/area, pixel=i%area;
+  float x=(float)(pixel%textureSize)*5.0f/(float)textureSize;
+  float z=(float)(pixel/textureSize)*5.0f/(float)textureSize;
+  x+=(float)seed*.137f+(float)kind*17.3f;
+  z-=(float)seed*.137f-(float)kind*11.7f;
+  float wx=x+(noise(x*3.0f,z*3.0f)-.5f)*.11f;
+  float wz=z+(noise(x*3.0f+7.0f,z*3.0f)-.5f)*.11f;
+  float broad=noise(wx*5.0f,wz*5.0f);
+  float fine=noise(wx*170.0f,wz*170.0f);
+  float warp=noise(wx*8.0f+9.0f,wz*8.0f)*1.4f;
+  float vein=powf(sat(1.0f-fabsf(sinf(wx*95.0f+wz*21.0f+warp*12.0f))),7.0f);
+  float folds=powf(1.0f-fabsf(noise(wx*22.0f,wz*22.0f)*2.0f-1.0f),5.0f);
+  float pores=sat((noise(wx*470.0f,wz*470.0f)-.62f)*6.0f);
+  float detail=.70f+broad*.25f+fine*.18f;
+  float micro=folds*.0018f+vein*.0013f+fine*.00030f-pores*.00035f;
+  float rough=.17f+broad*.13f;
+  if(kind==1) {
+    micro=folds*.0025f+vein*.0006f+fine*.00018f-pores*.0003f;
+    rough=.12f+broad*.11f;
+    detail=.72f+broad*.30f+fine*.09f;
+  }
+  if(kind==2) {
+    float clumps=powf(noise(wx*71.0f,wz*71.0f),3.0f);
+    micro=clumps*.0022f+fine*.00075f-pores*.0006f;
+    rough=.38f+broad*.20f;
+    detail=.55f+broad*.32f+fine*.35f;
+  }
+  textureMap[kind*chainLength+pixel]=packTex(make_float4(detail,micro,rough,0.0f));
+}
+__global__ void texture_mip(unsigned int *textureMap, int inputSize,
+                            int inputOffset, int outputOffset, int chainLength) {
+  int i=(int)((blockIdx.y*gridDim.x+blockIdx.x)*blockDim.x+threadIdx.x);
+  int size=inputSize/2, area=size*size;
+  if(i>=area*3) return;
+  int kind=i/area, pixel=i%area;
+  int j=kind*chainLength+inputOffset+(pixel/size)*2*inputSize+(pixel%size)*2;
+  float4 p=(unpackTex(textureMap[j])+unpackTex(textureMap[j+1])+
+            unpackTex(textureMap[j+inputSize])+unpackTex(textureMap[j+inputSize+1]))*.25f;
+  textureMap[kind*chainLength+outputOffset+pixel]=packTex(p);
+}
+__device__ float4 atlas(const unsigned int *textureMap, int kind, float u,
+                        float v, int size, int chainLength, int level) {
+  int offset=kind*chainLength;
+  for(int k=0;k<12;k++) {
+    if(k<level) {offset+=size*size; size=max(1,size/2);}
+  }
+  float x=(u/5.0f-floorf(u/5.0f))*(float)size;
+  float y=(v/5.0f-floorf(v/5.0f))*(float)size;
+  int ix=(int)x, iy=(int)y;
+  float fx=x-(float)ix, fy=y-(float)iy;
+  int jx=(ix+1)%size, jy=(iy+1)%size;
+  return unpackTex(textureMap[offset+iy*size+ix])*(1.0f-fx)*(1.0f-fy)+
+         unpackTex(textureMap[offset+iy*size+jx])*fx*(1.0f-fy)+
+         unpackTex(textureMap[offset+jy*size+ix])*(1.0f-fx)*fy+
+         unpackTex(textureMap[offset+jy*size+jx])*fx*fy;
+}
+__device__ float4 layeredAtlas(const unsigned int *maps, float u, float v,
+                               int size, int chainLength, int level,
+                               float4 weights, float4 swipe) {
+  float4 a=atlas(maps,0,u,v,size,chainLength,level);
+  float4 b=atlas(maps,1,u,v,size,chainLength,level);
+  float4 c=atlas(maps,2,u,v,size,chainLength,level);
+  float direction=sqrtf(swipe.x*swipe.x+swipe.y*swipe.y);
+  float tx=swipe.x/fmaxf(direction,.001f), tz=swipe.y/fmaxf(direction,.001f);
+  float4 streak=atlas(maps,1,(u*tx+v*tz)*.22f,(-u*tz+v*tx)*2.4f,
+                       size,chainLength,min(12,level+1));
+  float streakAmount=sat(swipe.z*.45f)*sat(direction*4.0f);
+  float4 result=a*weights.x+b*weights.y+c*weights.z;
+  return result*(1.0f-streakAmount)+streak*streakAmount;
+}
+__device__ float4 composition(float x,float z,int seed) {
+  float off=(float)seed*.137f;
+  float a=.16f+powf(.12f+noise(x*1.7f+off,z*1.7f),2.0f)*.75f;
+  float b=.05f+powf(.12f+noise(x*1.4f+13.0f,z*1.4f+off),2.0f)*.65f;
+  float c=powf(sat((noise(x*4.8f-8.0f,z*4.8f+off)-.35f)*1.9f),2.0f)*.22f;
+  float sum=fmaxf(a+b+c,.0001f);
+  return make_float4(a/sum,b/sum,c/sum,0.0f);
+}
+__global__ void surface_initialize(float4 *colours,float4 *coordinates,
+                                   float4 *swipes,int detailN,int seed) {
+  int i=(int)(blockIdx.x*blockDim.x+threadIdx.x);
+  if(i>=detailN*detailN) return;
+  float x=(float)(i%detailN)*5.0f/(float)(detailN-1)-2.5f;
+  float z=(float)(i/detailN)*5.0f/(float)(detailN-1)-2.5f;
+  colours[i]=composition(x,z,seed);
+  coordinates[i]=make_float4(x,z,0.0f,0.0f);
+  swipes[i]=make_float4(0.0f,0.0f,0.0f,0.0f);
+}
+// Fine material advection is independent of the coarser volume solver.
+// The drive contains the displacement integrated over every physics substep.
+__global__ void surface_advect(const float4 *field,const float4 *drive,
+  const float4 *coloursIn,const float4 *coordinatesIn,const float4 *swipesIn,
+  float4 *coloursOut,float4 *coordinatesOut,float4 *swipesOut,
+  int n,int detailN,float dt,int brush,float bx,float bz,float radius,
+  float amount,float brushVX,float brushVZ,int clayType,int seed) {
+  int i=(int)(blockIdx.x*blockDim.x+threadIdx.x);
+  if(i>=detailN*detailN) return;
+  float x=(float)(i%detailN)*5.0f/(float)(detailN-1)-2.5f;
+  float z=(float)(i/detailN)*5.0f/(float)(detailN-1)-2.5f;
+  float4 move=sample(drive,x,z,n);
+  float speed=sqrtf(move.x*move.x+move.y*move.y)/fmaxf(dt,.00001f);
+  float sx=x-move.x,sz=z-move.y;
+  float4 c=sample(coloursIn,sx,sz,detailN);
+  float4 coord=sample(coordinatesIn,sx,sz,detailN);
+  float4 sw=sample(swipesIn,sx,sz,detailN);
+  float len=sqrtf(move.x*move.x+move.y*move.y);
+  float tx=move.x/fmaxf(len,.000001f),tz=move.y/fmaxf(len,.000001f);
+  float activity=sat(move.z*.22f);
+  float reach=fminf(.09f,.012f+speed*.026f);
+  // Anisotropic mixing spreads pigment along the swipe instead of random recolouring.
+  float4 streak=(sample(coloursIn,sx+tx*reach,sz+tz*reach,detailN)+
+                 sample(coloursIn,sx-tx*reach,sz-tz*reach,detailN))*.5f;
+  c=c*(1.0f-activity)+streak*activity;
+  c.w=sat(c.w+move.z*.18f);
+  float alignment=sat(len*18.0f+move.w*.5f);
+  sw.x=sw.x*(1.0f-alignment)+tx*alignment;
+  sw.y=sw.y*(1.0f-alignment)+tz*alignment;
+  sw.z=sat(sw.z+move.z*.12f);
+  sw.w=fmaxf(sw.w*expf(-dt*1.8f),sat(speed/3.0f));
+  float dx=x-bx,dz=z-bz;
+  float weight=expf(-(dx*dx+dz*dz)/(radius*radius)*3.0f);
+  if(brush==4) {
+    coord.x-=brushVX*weight*dt*amount*.85f;
+    coord.y-=brushVZ*weight*dt*amount*.85f;
+  }
+  if(brush==5) {
+    float p=sat(weight*dt*amount*2.0f);
+    c.x=c.x*(1.0f-p)+(clayType==0?p:0.0f);
+    c.y=c.y*(1.0f-p)+(clayType==1?p:0.0f);
+    c.z=c.z*(1.0f-p)+(clayType==2?p:0.0f);
+  }
+  if(brush==6) {
+    coord.z=fminf(.8f,fmaxf(-.8f,coord.z+dx/radius*weight*dt*amount*3.0f));
+    coord.w=fminf(.8f,fmaxf(-.8f,coord.w+dz/radius*weight*dt*amount*3.0f));
+  }
+  if(brush==7) {
+    float erase=sat(weight*dt*amount*5.0f);
+    coord.z*=1.0f-erase; coord.w*=1.0f-erase;
+    float4 original=composition(coord.x,coord.y,seed);
+    c=c*(1.0f-erase)+original*erase;
+  }
+  float total=fmaxf(c.x+c.y+c.z,.000001f);
+  c.x/=total;c.y/=total;c.z/=total;
+  coloursOut[i]=c; coordinatesOut[i]=coord; swipesOut[i]=sw;
+}
+__global__ void surface_clear(float4 *drive,int n) {
+  int i=(int)(blockIdx.x*blockDim.x+threadIdx.x);
+  if(i<n*n) drive[i]=make_float4(0.0f,0.0f,0.0f,0.0f);
 }
 __device__ float contact(const float4 *field, float4 p, float x, float z,
                          int n) {
@@ -151,13 +279,13 @@ __device__ float2 shear(const float4 *field, const float4 *objects, float x,
 // Yielded shallow-layer flow: tau = rho*g*h*headGradient. Herschel-Bulkley
 // shear rate above yield, zero creep below yield. Coefficients are artistic.
 __device__ float plasticFlow(float drive, float depth, float spacing,
-                             float dt, float yieldStress) {
+                             float dt, float yieldStress, float rate) {
   float stress = fmaxf(0.0f, drive) / spacing * 1450.0f * 9.81f * depth;
   float excess = fmaxf(0.0f, stress-yieldStress);
   float gamma = fminf(40.0f, powf(excess/90.0f, 1.0f/.65f));
   float physical = .5f*depth*depth*gamma*dt/spacing;
   // Limit each face transfer to avoid explicit nonlinear diffusion ringing.
-  return fminf(physical, fmaxf(0.0f,drive)*fminf(.025f,dt*3.0f));
+  return fminf(physical, fmaxf(0.0f,drive)*fminf(.10f,dt*rate));
 }
 // Conservative pressure + tangential transport: soil is pushed ahead of a body,
 // pulled into a smear, and piles up. Zero thickness exposes the rigid concrete.
@@ -174,7 +302,7 @@ __global__ void mud_flux(const float4 *field, const float4 *objects,
   float spacing = 5.0f / (float)(n - 1);
   float x = (float)ix * spacing - 2.5f;
   float z = (float)iz * spacing - 2.5f;
-  float h = field[i].x + pressure(field, objects, x, z, n);
+  float contact = pressure(field, objects, x, z, n);
   float depth = fmaxf(field[i].x, .000001f);
   float moisture = sat(mixture[i].x / fmaxf(depth*.35f,.000001f));
   float yieldStress = (120.0f+(1.0f-softness)*1200.0f) *
@@ -186,29 +314,43 @@ __global__ void mud_flux(const float4 *field, const float4 *objects,
     velocity.x += brushVX * weight * 0.95f * amount;
     velocity.y += brushVZ * weight * 0.95f * amount;
   }
+  // Finite tangential traction cannot keep forcing material up an arbitrarily
+  // steep bank. Limit uphill entrainment before conservative donor limiting.
+  // Viscoplastic slip: tool speed can exceed the bulk clay velocity.
+  // Saturating entrainment prevents a fast swipe behaving like a conveyor.
+  float speed=sqrtf(velocity.x*velocity.x+velocity.y*velocity.y);
+  velocity = velocity / (1.0f+speed/.65f);
   float advect = dt / spacing * field[i].x;
   float a = 0.0f;
   float b = 0.0f;
   float c = 0.0f;
   float d = 0.0f;
   if (ix > 0)
-    a = plasticFlow(h-field[i-1].x-pressure(field,objects,x-spacing,z,n),depth,spacing,dt,yieldStress)
-        + fmaxf(0.0f,-velocity.x)*advect;
+    a = plasticFlow(field[i].x-field[i-1].x,depth,spacing,dt,yieldStress,48.0f)
+        + plasticFlow(contact-pressure(field,objects,x-spacing,z,n),depth,spacing,dt,yieldStress,3.0f)
+        + fmaxf(0.0f,-velocity.x)*advect *
+          sat(1.0f-fmaxf(0.0f,field[i-1].x-field[i].x)/(spacing*.25f));
   if (ix < n-1)
-    b = plasticFlow(h-field[i+1].x-pressure(field,objects,x+spacing,z,n),depth,spacing,dt,yieldStress)
-        + fmaxf(0.0f,velocity.x)*advect;
+    b = plasticFlow(field[i].x-field[i+1].x,depth,spacing,dt,yieldStress,48.0f)
+        + plasticFlow(contact-pressure(field,objects,x+spacing,z,n),depth,spacing,dt,yieldStress,3.0f)
+        + fmaxf(0.0f,velocity.x)*advect *
+          sat(1.0f-fmaxf(0.0f,field[i+1].x-field[i].x)/(spacing*.25f));
   if (iz > 0)
-    c = plasticFlow(h-field[i-n].x-pressure(field,objects,x,z-spacing,n),depth,spacing,dt,yieldStress)
-        + fmaxf(0.0f,-velocity.y)*advect;
+    c = plasticFlow(field[i].x-field[i-n].x,depth,spacing,dt,yieldStress,48.0f)
+        + plasticFlow(contact-pressure(field,objects,x,z-spacing,n),depth,spacing,dt,yieldStress,3.0f)
+        + fmaxf(0.0f,-velocity.y)*advect *
+          sat(1.0f-fmaxf(0.0f,field[i-n].x-field[i].x)/(spacing*.25f));
   if (iz < n-1)
-    d = plasticFlow(h-field[i+n].x-pressure(field,objects,x,z+spacing,n),depth,spacing,dt,yieldStress)
-        + fmaxf(0.0f,velocity.y)*advect;
+    d = plasticFlow(field[i].x-field[i+n].x,depth,spacing,dt,yieldStress,48.0f)
+        + plasticFlow(contact-pressure(field,objects,x,z+spacing,n),depth,spacing,dt,yieldStress,3.0f)
+        + fmaxf(0.0f,velocity.y)*advect *
+          sat(1.0f-fmaxf(0.0f,field[i+n].x-field[i].x)/(spacing*.25f));
   float scale =
       fminf(1.0f, fmaxf(0.0f, field[i].x) / fmaxf(a + b + c + d, 0.0000001f));
   flux[i] = make_float4(a, b, c, d) * scale;
 }
 __global__ void initialize(float4 *field, float4 *objects, float4 *material,
-                           float4 *mixture, float4 *residue, float *structure, int n, float water,
+                           float4 *mixture, float4 *residue, float *structure, float4 *drive, int n, float water,
                            float thickness, int seed) {
   int i = (int)(blockIdx.x * blockDim.x + threadIdx.x);
   if (i >= n * n)
@@ -235,6 +377,7 @@ __global__ void initialize(float4 *field, float4 *objects, float4 *material,
       make_float4(h * (0.22f + 0.09f * noise(x * 1.3f + offset, z * 1.3f)),
                   0.0f, 0.0f, noise(x * 2.7f + offset, z * 2.7f));
   structure[i] = 1.0f;
+  drive[i]=make_float4(0.0f,0.0f,0.0f,0.0f);
   residue[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
   material[i] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
   if (i < 4) {
@@ -568,7 +711,7 @@ __global__ void mixture_water(const float4 *field, const float4 *flux,
 }
 // Local reactions conserve water and solid across free/absorbed/suspended/stuck
 // compartments. Churning accelerates hydration and picks clay into the water.
-__global__ void churn(float4 *field, float4 *mixture, float4 *residue, float *structure,
+__global__ void churn(float4 *field, float4 *mixture, float4 *residue, float *structure, float4 *drive,
                       const float4 *objects, const float4 *solidFlux, int n,
                       float dt, int brush, float bx, float bz, float radius,
                       float brushVX, float brushVZ, float amount) {
@@ -637,6 +780,21 @@ __global__ void churn(float4 *field, float4 *mixture, float4 *residue, float *st
   float lambda = structure[i];
   float strainRate = activity/fmaxf(.025f,f.x);
   structure[i] = sat((lambda+dt*.125f)/(1.0f+dt*(.125f+.65f*strainRate)));
+  // Gather signed face fluxes into the fine material's integrated displacement.
+  int ix=i%n,iz=i/n;
+  float qx=flow.y-flow.x,qz=flow.w-flow.z;
+  if(ix>0) qx+=solidFlux[i-1].y;
+  if(ix<n-1) qx-=solidFlux[i+1].x;
+  if(iz>0) qz+=solidFlux[i-n].w;
+  if(iz<n-1) qz-=solidFlux[i+n].z;
+  float spacing=5.0f/(float)(n-1);
+  float scale=spacing/(2.0f*fmaxf(f.x,.001f));
+  float4 movement=drive[i];
+  movement.x+=fminf(dt*6.0f,fmaxf(-dt*6.0f,qx*scale));
+  movement.y+=fminf(dt*6.0f,fmaxf(-dt*6.0f,qz*scale));
+  movement.z+=strainRate*dt;
+  movement.w+=activity*dt;
+  drive[i]=movement;
   field[i] = f;
   mixture[i] = m;
   residue[i] = r;
@@ -684,9 +842,10 @@ __device__ float3 sky(float3 d) {
                      0.25f + t * .42f + panel * 4.2f);
 }
 __global__ void render(const float4 *field, const float4 *materialMap,
-                       const float4 *objects, const float4 *textureMap,
+                       const float4 *objects, const unsigned int *textureMap,
                        const float4 *mixture, const float4 *residue,
-                       unsigned int *pixels, int textureSize, int n, int width,
+                       const float4 *colours, const float4 *coordinates, const float4 *swipes,
+                       unsigned int *pixels, int textureSize, int chainLength, int detailN, int n, int width,
                        int rows, float yaw, float pitch, float distance,
                        float textureScale, float bump, float wetness, int view,
                        int selected, float time) {
@@ -849,23 +1008,27 @@ __global__ void render(const float4 *field, const float4 *materialMap,
                   height(field, mixture, hit.x, hit.z + e, n)) /
                  (2.0f * e);
       wet = sat((moisture * 0.65f + pool) * (.55f + wetness * .45f));
-      float u = f.z * textureScale;
-      float v = f.w * textureScale;
-      float4 tex = atlas(textureMap, u, v, textureSize);
-      float texel = 5.0f / (float)textureSize;
+      float4 coord=sample(coordinates,hit.x,hit.z,detailN);
+      float4 weights=sample(colours,hit.x,hit.z,detailN);
+      float4 swipe=sample(swipes,hit.x,hit.z,detailN);
+      float u=coord.x*textureScale,v=coord.y*textureScale;
+      float footprint=t*1.25f/(float)rows/fmaxf(.3f,fabsf(rd.y))*textureScale;
+      int level=0;float texel=5.0f/(float)textureSize;
+      for(int k=0;k<12;k++) {if(texel<footprint*.75f){texel*=2.0f;level++;}}
+      float4 tex=layeredAtlas(textureMap,u,v,textureSize,chainLength,level,weights,swipe);
       float detail = tex.x * (1.0f - mix.z * .45f) + mix.z * .45f;
-      float4 uvL = sample(field, hit.x-e, hit.z, n);
-      float4 uvR = sample(field, hit.x+e, hit.z, n);
-      float4 uvD = sample(field, hit.x, hit.z-e, n);
-      float4 uvU = sample(field, hit.x, hit.z+e, n);
-      float duDx = fminf(4.0f,fmaxf(-4.0f,(uvR.z-uvL.z)/(2.0f*e))) * textureScale;
-      float dvDx = fminf(4.0f,fmaxf(-4.0f,(uvR.w-uvL.w)/(2.0f*e))) * textureScale;
-      float duDz = fminf(4.0f,fmaxf(-4.0f,(uvU.z-uvD.z)/(2.0f*e))) * textureScale;
-      float dvDz = fminf(4.0f,fmaxf(-4.0f,(uvU.w-uvD.w)/(2.0f*e))) * textureScale;
-      float gradU = (atlas(textureMap,u-texel,v,textureSize).y -
-                     atlas(textureMap,u+texel,v,textureSize).y)/(2.0f*texel);
-      float gradV = (atlas(textureMap,u,v-texel,textureSize).y -
-                     atlas(textureMap,u,v+texel,textureSize).y)/(2.0f*texel);
+      float4 uvL = sample(coordinates, hit.x-e, hit.z, detailN);
+      float4 uvR = sample(coordinates, hit.x+e, hit.z, detailN);
+      float4 uvD = sample(coordinates, hit.x, hit.z-e, detailN);
+      float4 uvU = sample(coordinates, hit.x, hit.z+e, detailN);
+      float duDx = fminf(4.0f,fmaxf(-4.0f,(uvR.x-uvL.x)/(2.0f*e))) * textureScale;
+      float dvDx = fminf(4.0f,fmaxf(-4.0f,(uvR.y-uvL.y)/(2.0f*e))) * textureScale;
+      float duDz = fminf(4.0f,fmaxf(-4.0f,(uvU.x-uvD.x)/(2.0f*e))) * textureScale;
+      float dvDz = fminf(4.0f,fmaxf(-4.0f,(uvU.y-uvD.y)/(2.0f*e))) * textureScale;
+      float gradU = (layeredAtlas(textureMap,u-texel,v,textureSize,chainLength,level,weights,swipe).y -
+                     layeredAtlas(textureMap,u+texel,v,textureSize,chainLength,level,weights,swipe).y)/(2.0f*texel);
+      float gradV = (layeredAtlas(textureMap,u,v-texel,textureSize,chainLength,level,weights,swipe).y -
+                     layeredAtlas(textureMap,u,v+texel,textureSize,chainLength,level,weights,swipe).y)/(2.0f*texel);
       float detailStrength = bump*(1.0f-pool*.96f)*(1.0f-mix.z*.30f);
       nx += (gradU*duDx + gradV*dvDx)*detailStrength;
       nz += (gradU*duDz + gradV*dvDz)*detailStrength;
@@ -883,14 +1046,14 @@ __global__ void render(const float4 *field, const float4 *materialMap,
         nz += wave * dz / fmaxf(radius, 0.01f);
       }
       if (side == 0)
-        normal = norm(make_float3(nx + paint.z, 1.0f, nz + paint.w));
+        normal = norm(make_float3(nx + coord.z, 1.0f, nz + coord.w));
       else
         wet = 0.0f;
-      float3 clayA = make_float3(.043f, .023f, .012f);
-      float3 clayB = make_float3(.085f, .049f, .025f);
-      float3 clay = add(mul(clayA, 1.0f - mix.w), mul(clayB, mix.w));
+      float3 clay=add(add(mul(make_float3(.035f,.014f,.007f),weights.x),
+                             mul(make_float3(.105f,.048f,.020f),weights.y)),
+                         mul(make_float3(.120f,.090f,.055f),weights.z));
       base = mul(clay,
-                 detail * (1.0f - paint.x * .65f) * (1.0f - moisture * .32f));
+                 detail * (1.0f - paint.x * .08f) * (1.0f - moisture * .32f));
       rough = fmaxf(.065f, (tex.z + .16f) * (1.0f - moisture * .78f) *
                                    (1.0f - mix.z * .25f) +
                                paint.y);
@@ -916,6 +1079,8 @@ __global__ void render(const float4 *field, const float4 *materialMap,
       base = add(mul(base, 1.0f - pool * (1.0f - transmission)),
                  mul(waterColour, pool * (1.0f - transmission)));
       rough = rough * (1.0f - pool) + (.04f + turbidity * .08f) * pool;
+      if(view==6) {base=make_float3(weights.x,weights.y,weights.z);wet=0.0f;}
+      if(view==7) {base=make_float3(swipe.x*.5f+.5f,swipe.y*.5f+.5f,swipe.z);wet=0.0f;}
       if (view == 4) {
         base = make_float3(moisture, pool, turbidity);
         wet = 0.0f;

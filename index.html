@@ -27,7 +27,7 @@
             ><button id="shot">Save image</button>
           </div>
         </div>
-        <canvas id="scene" width="960" height="640"></canvas>
+        <canvas id="scene" width="1280" height="832"></canvas>
         <div id="loading">Compiling GPU pipelines…</div>
         <div class="scene-note">
           <span id="status">Starting</span
@@ -100,8 +100,11 @@
             step=".01"
             value=".6"
         /></label>
-        <div class="section">GENERATED MATERIAL · 2048²</div>
+        <div class="section">GENERATED MATERIAL · 3 × 4096²</div>
         <button id="regenerate" class="demo">Regenerate mud texture ↗</button>
+        <label class="select-label">Paint material<select id="clayType">
+          <option value="0">Dark clay</option><option value="1" selected>Warm clay</option><option value="2">Pale silt</option>
+        </select></label>
         <label
           >Texture scale <output id="textureScaleOut">1.00</output
           ><input
@@ -142,16 +145,18 @@
             <option value="3">Transported UV grid</option>
             <option value="4">Moisture / pools / sediment</option>
             <option value="5">Concrete residue / mixing</option>
+            <option value="6">Clay / ochre / silt blend</option>
+            <option value="7">Swipe direction / strain</option>
           </select></label
         ><label class="select-label"
           >Render resolution<select id="quality">
             <option value="640">Fast · 640 × 448</option>
-            <option value="960" selected>Balanced · 960 × 640</option>
-            <option value="1280">Fine · 1280 × 832</option>
+            <option value="960">Balanced · 960 × 640</option>
+            <option value="1280" selected>Fine · 1280 × 832</option>
           </select></label
         ><button id="demo" class="demo">Run a slow drag study ↗</button>
         <div class="foot">
-          256² soil cells · 19.6 mm spacing<br />Simulation, UVs, normals &
+          512² soil cells · 9.8 mm spacing<br />1024² live material / 3 texture layers<br />Simulation, UVs, normals &
           pixels authored in <a href="src/mud.cu">mud.cu</a>
         </div>
       </aside>

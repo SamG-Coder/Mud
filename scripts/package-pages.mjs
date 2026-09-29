@@ -1,3 +1,4 @@
+import { KERNELS } from "../src/kernels.js";
 import { readFile, writeFile, mkdir, copyFile, rm } from "node:fs/promises";
 import { resolve, relative, dirname, sep } from "node:path";
 await import("./build.mjs");
@@ -26,7 +27,7 @@ async function moduleTree(path) {
 await moduleTree("src/main.js");
 for (const path of ["index.html", "style.css", "src/mud.cu", "vendor/cuda-webshader/LICENSE", "docs/mud-rheology.md"])
   await copy(path);
-const entries = ["texture_generate", "initialize", "objects_step", "mud_flux", "mud_step", "water_flux", "water_step", "material_edit", "material_transport", "mixture_solid", "mixture_water", "churn", "render"];
+const entries = KERNELS;
 for (const entry of entries) {
   const path = `generated/${entry}.json`;
   const artifact = JSON.parse(await readFile(path, "utf8"));
