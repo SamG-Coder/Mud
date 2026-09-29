@@ -18,7 +18,7 @@ Each face computes a shallow-layer driving stress using rho*g*depth*headGradient
 
 Contact pressure comes from the collider's lower spherical surface or flat block underside. Intrusion pushes mud toward the footprint rim. Vertical support uses overdamped penetration rather than an elastic height spring. Free-falling objects remain gravitational until contact. This avoids storing artificial rebound energy in the support model.
 
-UV gradients transform generated texture-height gradients into surface normals. A 512-square physical grid accumulates transport for a separate 1024-square surface map. Three 4096-square procedural material layers blend through advected weights. UVs, blend weights, editable tangent normals and permanent swipe strain follow the integrated flow; faster stirring mixes neighbouring material colours along the transport direction. Fine material transport is semi-Lagrangian and does not independently conserve pigment mass. Diagnostics display raw values without material lighting, which otherwise washed out the normal view.
+UV gradients transform generated texture-height gradients into surface normals. A 512-square physical grid accumulates transport for a separate 1024-square surface map. Three 4096-square procedural material layers blend through advected weights. UVs, blend weights, editable tangent normals and permanent swipe strain follow integrated bulk flow plus a separate surface contact-shear contribution; faster stirring mixes neighbouring material colours along the transport direction. Fine material transport is semi-Lagrangian and does not independently conserve pigment mass. Diagnostics display raw values without material lighting, which otherwise washed out the normal view.
 
 ## Limits and validation
 

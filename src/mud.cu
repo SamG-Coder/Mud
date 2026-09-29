@@ -178,7 +178,7 @@ __global__ void surface_initialize(float4 *colours,float4 *coordinates,
 }
 // Fine material advection is independent of the coarser volume solver.
 // The drive contains the displacement integrated over every physics substep.
-__global__ void surface_advect(const float4 *field,const float4 *drive,
+__global__ void surface_advect(const float4 *field,const float4 *drive,const float4 *objects,
   const float4 *coloursIn,const float4 *coordinatesIn,const float4 *swipesIn,
   float4 *coloursOut,float4 *coordinatesOut,float4 *swipesOut,
   int n,int detailN,float dt,int brush,float bx,float bz,float radius,
@@ -188,6 +188,26 @@ __global__ void surface_advect(const float4 *field,const float4 *drive,
   float x=(float)(i%detailN)*5.0f/(float)(detailN-1)-2.5f;
   float z=(float)(i/detailN)*5.0f/(float)(detailN-1)-2.5f;
   float4 move=sample(drive,x,z,n);
+  // The upper material shears past the depth-averaged bulk. Transport the
+  // visible clay film with contact velocity even when a bank resists volume flow.
+  float dx=x-bx,dz=z-bz;
+  float weight=expf(-(dx*dx+dz*dz)/(radius*radius)*3.0f);
+  float2 skin=make_float2(0.0f,0.0f);
+  for(int j=0;j<4;j++) {
+    float4 body=objects[j*2],velocity=objects[j*2+1];
+    float px=x-body.x,pz=z-body.z;
+    float r=sqrtf(px*px+pz*pz)/body.w;
+    if(j==3) r=fmaxf(fabsf(px),fabsf(pz))/body.w;
+    float depth=sample(field,body.x,body.z,n).x;
+    float touch=sat((depth+body.w-body.y)/fmaxf(.015f,body.w*.45f));
+    float influence=expf(-r*r*1.7f)*touch*.65f;
+    skin.x+=velocity.x*influence; skin.y+=velocity.z*influence;
+  }
+  if(brush==8) {skin.x+=brushVX*weight*amount*.55f;skin.y+=brushVZ*weight*amount*.55f;}
+  float skinSpeed=sqrtf(skin.x*skin.x+skin.y*skin.y);
+  skin*=fminf(1.0f,4.0f/fmaxf(skinSpeed,.00001f))*sat(sample(field,x,z,n).x*500.0f);
+  move.x+=skin.x*dt;move.y+=skin.y*dt;
+
   float speed=sqrtf(move.x*move.x+move.y*move.y)/fmaxf(dt,.00001f);
   float sx=x-move.x,sz=z-move.y;
   float4 c=sample(coloursIn,sx,sz,detailN);
@@ -207,14 +227,12 @@ __global__ void surface_advect(const float4 *field,const float4 *drive,
   sw.y=sw.y*(1.0f-alignment)+tz*alignment;
   sw.z=sat(sw.z+move.z*.12f);
   sw.w=fmaxf(sw.w*expf(-dt*1.8f),sat(speed/3.0f));
-  float dx=x-bx,dz=z-bz;
-  float weight=expf(-(dx*dx+dz*dz)/(radius*radius)*3.0f);
   if(brush==4) {
     coord.x-=brushVX*weight*dt*amount*.85f;
     coord.y-=brushVZ*weight*dt*amount*.85f;
   }
   if(brush==5) {
-    float p=sat(weight*dt*amount*2.0f);
+    float p=1.0f-expf(-weight*dt*amount*28.0f);
     c.x=c.x*(1.0f-p)+(clayType==0?p:0.0f);
     c.y=c.y*(1.0f-p)+(clayType==1?p:0.0f);
     c.z=c.z*(1.0f-p)+(clayType==2?p:0.0f);
@@ -319,7 +337,7 @@ __global__ void mud_flux(const float4 *field, const float4 *objects,
   // Viscoplastic slip: tool speed can exceed the bulk clay velocity.
   // Saturating entrainment prevents a fast swipe behaving like a conveyor.
   float speed=sqrtf(velocity.x*velocity.x+velocity.y*velocity.y);
-  velocity = velocity / (1.0f+speed/.65f);
+  velocity = velocity / (1.0f+speed/1.8f);
   float advect = dt / spacing * field[i].x;
   float a = 0.0f;
   float b = 0.0f;
@@ -329,22 +347,22 @@ __global__ void mud_flux(const float4 *field, const float4 *objects,
     a = plasticFlow(field[i].x-field[i-1].x,depth,spacing,dt,yieldStress,48.0f)
         + plasticFlow(contact-pressure(field,objects,x-spacing,z,n),depth,spacing,dt,yieldStress,3.0f)
         + fmaxf(0.0f,-velocity.x)*advect *
-          sat(1.0f-fmaxf(0.0f,field[i-1].x-field[i].x)/(spacing*.25f));
+          sat(1.0f-fmaxf(0.0f,field[i-1].x-field[i].x)/(spacing*.65f));
   if (ix < n-1)
     b = plasticFlow(field[i].x-field[i+1].x,depth,spacing,dt,yieldStress,48.0f)
         + plasticFlow(contact-pressure(field,objects,x+spacing,z,n),depth,spacing,dt,yieldStress,3.0f)
         + fmaxf(0.0f,velocity.x)*advect *
-          sat(1.0f-fmaxf(0.0f,field[i+1].x-field[i].x)/(spacing*.25f));
+          sat(1.0f-fmaxf(0.0f,field[i+1].x-field[i].x)/(spacing*.65f));
   if (iz > 0)
     c = plasticFlow(field[i].x-field[i-n].x,depth,spacing,dt,yieldStress,48.0f)
         + plasticFlow(contact-pressure(field,objects,x,z-spacing,n),depth,spacing,dt,yieldStress,3.0f)
         + fmaxf(0.0f,-velocity.y)*advect *
-          sat(1.0f-fmaxf(0.0f,field[i-n].x-field[i].x)/(spacing*.25f));
+          sat(1.0f-fmaxf(0.0f,field[i-n].x-field[i].x)/(spacing*.65f));
   if (iz < n-1)
     d = plasticFlow(field[i].x-field[i+n].x,depth,spacing,dt,yieldStress,48.0f)
         + plasticFlow(contact-pressure(field,objects,x,z+spacing,n),depth,spacing,dt,yieldStress,3.0f)
         + fmaxf(0.0f,velocity.y)*advect *
-          sat(1.0f-fmaxf(0.0f,field[i+n].x-field[i].x)/(spacing*.25f));
+          sat(1.0f-fmaxf(0.0f,field[i+n].x-field[i].x)/(spacing*.65f));
   float scale =
       fminf(1.0f, fmaxf(0.0f, field[i].x) / fmaxf(a + b + c + d, 0.0000001f));
   flux[i] = make_float4(a, b, c, d) * scale;
@@ -1029,7 +1047,7 @@ __global__ void render(const float4 *field, const float4 *materialMap,
                      layeredAtlas(textureMap,u+texel,v,textureSize,chainLength,level,weights,swipe).y)/(2.0f*texel);
       float gradV = (layeredAtlas(textureMap,u,v-texel,textureSize,chainLength,level,weights,swipe).y -
                      layeredAtlas(textureMap,u,v+texel,textureSize,chainLength,level,weights,swipe).y)/(2.0f*texel);
-      float detailStrength = bump*(1.0f-pool*.96f)*(1.0f-mix.z*.30f);
+      float detailStrength = bump*(1.0f-pool*.96f*(1.0f-turbidity*.65f))*(1.0f-mix.z*.30f);
       nx += (gradU*duDx + gradV*dvDx)*detailStrength;
       nz += (gradU*duDz + gradV*dvDz)*detailStrength;
       // Shallow water micro-ripples respond to moving contact bodies.

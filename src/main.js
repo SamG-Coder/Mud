@@ -430,7 +430,7 @@ function integrate(batch, dt) {
 }
 function surfaceStep(batch,dt) {
   dispatch(batch,"surface_advect",{
-    field:a,drive,coloursIn:colours,coordinatesIn:coordinates,swipesIn:swipes,
+    field:a,drive,objects,coloursIn:colours,coordinatesIn:coordinates,swipesIn:swipes,
     coloursOut:coloursScratch,coordinatesOut:coordinatesScratch,swipesOut:swipesScratch,
   },{n,detailN,dt,brush,bx,bz,radius:state.radius,amount:state.amount,
      brushVX,brushVZ,clayType:state.clayType,seed:state.seed},detailN*detailN);

@@ -66,7 +66,34 @@ try {
   for(const key of ['colours','coordinates','swipes']) {
     if(beforeRegeneration[key].some((v,i)=>v!==afterRegeneration[key][i])) throw Error('Texture regeneration reset live surface state');
   }
-  const report={slow,fast,persistent,peakDepth,colourDelta,coordinateDelta,textureRegenerationPreservesSurface:true,
+  // A moving stroke must carry actual painted colour across a boundary.
+  await page.evaluate(()=>mudTest.resetLayer(8));await page.evaluate(()=>mudTest.advance(240));
+  await page.locator('#radius').fill('0.8');await page.selectOption('#clayType','2');
+  await page.evaluate(()=>mudTest.brush(5,0,1.1));await page.evaluate(()=>mudTest.advance(120));
+  await page.locator('#radius').fill('0.2');await page.selectOption('#clayType','1');
+  await page.evaluate(()=>mudTest.brush(5,-.8,1.1));await page.evaluate(()=>mudTest.advance(30));
+  await page.evaluate(()=>mudTest.release());
+  const strokeBefore=await page.evaluate(()=>mudTest.surfaceSnapshot());
+  function targetWarm(surface) {
+    let sum=0,count=0;
+    for(let z=0;z<surface.size;z++)for(let x=0;x<surface.size;x++) {
+      const px=x*4*5/1023-2.5,pz=z*4*5/1023-2.5;
+      if(px>.1&&px<.65&&Math.abs(pz-1.1)<.12){sum+=surface.colours[(z*surface.size+x)*4+1];count++;}
+    }
+    return sum/count;
+  }
+  await page.waitForTimeout(150);await page.locator('#scene').screenshot({path:'artifacts/mud-colour-stroke-before.png'});
+  await page.locator('#radius').fill('0.3');
+  for(let k=0;k<16;k++) {
+    await page.evaluate(x=>mudTest.brush(8,x,1.1,2,0),-.8+k*.1);
+    await page.evaluate(()=>mudTest.advance(6));
+  }
+  await page.evaluate(()=>mudTest.release());
+  const strokeAfter=await page.evaluate(()=>mudTest.surfaceSnapshot());
+  const colourTransfer={before:targetWarm(strokeBefore),after:targetWarm(strokeAfter)};
+  if(colourTransfer.after-colourTransfer.before<.1)throw Error(`Moving swipe did not carry warm clay into silt: ${JSON.stringify(colourTransfer)}`);
+  await page.waitForTimeout(150);await page.locator('#scene').screenshot({path:'artifacts/mud-colour-stroke-after.png'});
+  const report={colourTransfer,slow,fast,persistent,peakDepth,colourDelta,coordinateDelta,textureRegenerationPreservesSurface:true,
     gpuMemoryMiB:await page.evaluate(()=>[...mudTest.runtime.buffers].reduce((a,b)=>a+b.size,0)/1048576),
     diagnostics:await page.evaluate(()=>({grid:mudDiagnostics.grid,materialGrid:mudDiagnostics.materialGrid,textureResolution:mudDiagnostics.textureResolution,textureLayers:mudDiagnostics.textureLayers,kernels:mudDiagnostics.stats.pipelineCompiles})),errors};
   await writeFile('artifacts/material-validation.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
