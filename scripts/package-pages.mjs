@@ -26,7 +26,7 @@ async function moduleTree(path) {
   }
 }
 await moduleTree("src/main.js");
-for (const path of ["index.html", "style.css", "src/mud.cu", "vendor/cuda-webshader/LICENSE", "docs/mud-rheology.md"])
+for (const path of ["index.html", "style.css", "LICENSE", "src/mud.cu", "vendor/cuda-webshader/LICENSE", "docs/mud-rheology.md"])
   await copy(path);
 const entries = KERNELS;
 for (const entry of entries) {

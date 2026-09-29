@@ -69,3 +69,7 @@ Run `npm run check` and `npm run pages` locally to create `dist/`. GitHub Action
 - [vendor/cuda-webshader](vendor/cuda-webshader): copied from D:\cuda-webshader, local HEAD ef46ff1bf02a306bad94ddc18286d25d3d902c14; upstream MIT license retained.
 
 Rebuild after editing `.cu` and reload. Generated artifacts are included in generated/.
+
+## License
+
+Mud is licensed under the [MIT License](LICENSE). Vendored CUDA WebShader code retains its [MIT license and copyright notice](vendor/cuda-webshader/LICENSE).
