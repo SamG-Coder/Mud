@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Mud — CUDA surface lab</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="./">M<span>UD</span><small>SURFACE LAB</small></a>
+      <div class="heading">
+        A little earth. A little water.<span
+          >A living 5 × 5 metre material study.</span
+        >
+      </div>
+      <div class="badge"><i></i> CUDA / WEBGPU</div>
+    </header>
+    <main>
+      <section class="stage">
+        <div class="scene-head">
+          <span>01 / INTERACTIVE STUDY</span>
+          <div>
+            <button id="pause">Pause</button
+            ><button id="reset">Reset surface</button
+            ><button id="shot">Save image</button>
+          </div>
+        </div>
+        <canvas id="scene" width="960" height="640"></canvas>
+        <div id="loading">Compiling GPU pipelines…</div>
+        <div class="scene-note">
+          <span id="status">Starting</span
+          ><span>5.00 m × 5.00 m · <b id="fps">—</b></span>
+        </div>
+        <div class="hint">
+          Drag a ball to feel the mud · Right drag to orbit · Scroll to zoom
+        </div>
+        <div class="tools">
+          <button data-tool="0" class="active">Move objects</button
+          ><button data-tool="1">Add water</button
+          ><button data-tool="2">Press mud</button
+          ><button data-tool="3">Build up</button
+          ><button data-tool="8">Smear mud</button
+          ><button data-tool="4">Smear UV</button
+          ><button data-tool="5">Paint wet clay</button
+          ><button data-tool="6">Edit normals</button
+          ><button data-tool="7">Erase paint</button>
+        </div>
+        <div id="error" hidden></div>
+      </section>
+      <aside>
+        <div class="eyebrow">MATERIAL / 01</div>
+        <h1>Mud on concrete.</h1>
+        <p>
+          Clay, separate water pools, and a solid concrete base. Drag to churn
+          the clay, mix water into it, and leave dirty smears behind.
+        </p>
+        <div class="section">LAYER & WATER</div>
+        <label
+          >Total mud thickness <output id="thicknessOut">8.0 cm</output
+          ><input
+            id="thickness"
+            type="range"
+            min="0.5"
+            max="25"
+            step="0.5"
+            value="8" /></label
+        ><small class="help"
+          >Thickness applies when you reset the layer. Concrete stays solid
+          beneath it.</small
+        >
+        <label
+          >Softness <output id="softnessOut">0.72</output
+          ><input
+            id="softness"
+            type="range"
+            min="0"
+            max="1"
+            step=".01"
+            value=".72" /></label
+        ><label
+          >Initial water <output id="waterOut">6 mm</output
+          ><input
+            id="water"
+            type="range"
+            min="0"
+            max=".04"
+            step=".001"
+            value=".006" /></label
+        ><small class="help"
+          >Water depth applies when you reset the surface.</small
+        ><label
+          >Wet sheen <output id="wetnessOut">0.60</output
+          ><input
+            id="wetness"
+            type="range"
+            min="0"
+            max="1"
+            step=".01"
+            value=".6"
+        /></label>
+        <div class="section">GENERATED MATERIAL · 2048²</div>
+        <button id="regenerate" class="demo">Regenerate mud texture ↗</button>
+        <label
+          >Texture scale <output id="textureScaleOut">1.00</output
+          ><input
+            id="textureScale"
+            type="range"
+            min=".25"
+            max="4"
+            step=".05"
+            value="1" /></label
+        ><label
+          >Normal detail <output id="bumpOut">0.80</output
+          ><input
+            id="bump"
+            type="range"
+            min="0"
+            max="2"
+            step=".05"
+            value=".8" /></label
+        ><label
+          >Brush radius <output id="radiusOut">0.25 m</output
+          ><input
+            id="radius"
+            type="range"
+            min=".08"
+            max=".8"
+            step=".01"
+            value=".25" /></label
+        ><label
+          >Brush strength <output id="amountOut">1.00</output
+          ><input id="amount" type="range" min=".1" max="3" step=".1" value="1"
+        /></label>
+        <div class="section">INSPECT</div>
+        <label class="select-label"
+          >Surface view<select id="view">
+            <option value="0">Rendered material</option>
+            <option value="1">Soil height / water</option>
+            <option value="2">Surface normals</option>
+            <option value="3">Transported UV grid</option>
+            <option value="4">Moisture / pools / sediment</option>
+            <option value="5">Concrete residue / mixing</option>
+          </select></label
+        ><label class="select-label"
+          >Render resolution<select id="quality">
+            <option value="640">Fast · 640 × 448</option>
+            <option value="960" selected>Balanced · 960 × 640</option>
+            <option value="1280">Fine · 1280 × 832</option>
+          </select></label
+        ><button id="demo" class="demo">Run a slow drag study ↗</button>
+        <div class="foot">
+          256² soil cells · 19.6 mm spacing<br />Simulation, UVs, normals &
+          pixels authored in <a href="src/mud.cu">mud.cu</a>
+        </div>
+      </aside>
+    </main>
+    <script type="module" src="src/main.js"></script>
+  </body>
+</html>

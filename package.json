@@ -1,0 +1,15 @@
+{
+  "name": "mud",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "pages": "node scripts/package-pages.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/serve.mjs",
+    "test": "node scripts/test.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}
